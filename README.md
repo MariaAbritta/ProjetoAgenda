@@ -3,6 +3,9 @@
 <div style="display: inline_block" align="center"><br>
   <img align="center" alt="Thyago-JAVA" height="30" width="80" src="https://img.shields.io/badge/-JavaScript-yellow">
   <img align="center" alt="Thyago-JAVA" height="30" width="80"  src="https://img.shields.io/badge/-Node-brightgreen"/></br>
+   <img align="center" alt="Thyago-JAVA" height="30" width="80"  src=" https://www.flaticon.com/free-icon/js_5968292?term=node&page=1&position=3&page=1&position=3&related_id=5968292&origin=search"/></br>
+  
+ 
 </div></br>
 
 #### Pensando em criar um desafio em que juntasse os estudos em JavaScript + Node (com Express e MongoDB), fiz uma agenda onde possui as funções de:
