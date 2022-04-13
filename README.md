@@ -14,5 +14,8 @@
 6. Apagar contatos 
 7. Correção ao apagar contatos
 
-##Link explicando a forma que ajustei meu css: https://getbootstrap.com.br/docs/4.1/utilities/spacing/
+## Link explicando a forma que ajustei meu css: https://getbootstrap.com.br/docs/4.1/utilities/spacing/
 
+## Link do style da navbar: https://getbootstrap.com/docs/5.1/components/navbar/
+
+## Link do style da navbar: https://getbootstrap.com/docs/5.1/forms/overview/
