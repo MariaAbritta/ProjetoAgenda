@@ -6,8 +6,8 @@ const mongoose = require('mongoose');
 
 mongoose.connect(process.env.CONNECTIONSTRING, { useNewUrlParser: true, useUnifiedTopology: true })
   .then(() => {
-    console.log('Conectei a base de dados');
-    app.emit('Pronto');
+    console.log('Base de dados MOngoDB Atlas concectado!');
+    app.emit('Pronto.');
   })
   .catch(e => console.log(e));
 
@@ -25,7 +25,7 @@ app.set('view engine', 'ejs');
 app.use(middlewareGlobal);
 app.use(routes);
 
-app.on("Pronto", () => {
+app.on("Pronto.", () => {
   app.listen(3000, () => {
     console.log('Acessar http://localhost:3000');
     console.log('Servidor executando na porta 3000');
