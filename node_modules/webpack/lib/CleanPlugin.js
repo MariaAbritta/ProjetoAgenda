@@ -6,19 +6,20 @@
 "use strict";
 
 const asyncLib = require("neo-async");
-const { validate } = require("schema-utils");
 const { SyncBailHook } = require("tapable");
 const Compilation = require("../lib/Compilation");
+const createSchemaValidation = require("./util/create-schema-validation");
 const { join } = require("./util/fs");
-const memoize = require("./util/memoize");
 const processAsyncTree = require("./util/processAsyncTree");
 
 /** @typedef {import("../declarations/WebpackOptions").CleanOptions} CleanOptions */
 /** @typedef {import("./Compiler")} Compiler */
 /** @typedef {import("./logging/Logger").Logger} Logger */
 /** @typedef {import("./util/fs").OutputFileSystem} OutputFileSystem */
+/** @typedef {import("./util/fs").StatsCallback} StatsCallback */
 
 /** @typedef {(function(string):boolean)|RegExp} IgnoreItem */
+/** @typedef {Map<string, number>} Assets */
 /** @typedef {function(IgnoreItem): void} AddToIgnoreCallback */
 
 /**
@@ -26,25 +27,46 @@ const processAsyncTree = require("./util/processAsyncTree");
  * @property {SyncBailHook<[string], boolean>} keep when returning true the file/directory will be kept during cleaning, returning false will clean it and ignore the following plugins and config
  */
 
-const getSchema = memoize(() => {
-	const { definitions } = require("../schemas/WebpackOptions.json");
-	return {
-		definitions,
-		oneOf: [{ $ref: "#/definitions/CleanOptions" }]
-	};
-});
+const validate = createSchemaValidation(
+	undefined,
+	() => {
+		const { definitions } = require("../schemas/WebpackOptions.json");
+		return {
+			definitions,
+			oneOf: [{ $ref: "#/definitions/CleanOptions" }]
+		};
+	},
+	{
+		name: "Clean Plugin",
+		baseDataPath: "options"
+	}
+);
+const _10sec = 10 * 1000;
+
+/**
+ * marge assets map 2 into map 1
+ * @param {Assets} as1 assets
+ * @param {Assets} as2 assets
+ * @returns {void}
+ */
+const mergeAssets = (as1, as2) => {
+	for (const [key, value1] of as2) {
+		const value2 = as1.get(key);
+		if (!value2 || value1 > value2) as1.set(key, value1);
+	}
+};
 
 /**
  * @param {OutputFileSystem} fs filesystem
  * @param {string} outputPath output path
- * @param {Set<string>} currentAssets filename of the current assets (must not start with .. or ., must only use / as path separator)
- * @param {function(Error=, Set<string>=): void} callback returns the filenames of the assets that shouldn't be there
+ * @param {Map<string, number>} currentAssets filename of the current assets (must not start with .. or ., must only use / as path separator)
+ * @param {function((Error | null)=, Set<string>=): void} callback returns the filenames of the assets that shouldn't be there
  * @returns {void}
  */
 const getDiffToFs = (fs, outputPath, currentAssets, callback) => {
 	const directories = new Set();
 	// get directories of assets
-	for (const asset of currentAssets) {
+	for (const [asset] of currentAssets) {
 		directories.add(asset.replace(/(^|\/)[^/]*$/, ""));
 	}
 	// and all parent directories
@@ -84,16 +106,32 @@ const getDiffToFs = (fs, outputPath, currentAssets, callback) => {
 };
 
 /**
- * @param {Set<string>} currentAssets assets list
- * @param {Set<string>} oldAssets old assets list
+ * @param {Assets} currentAssets assets list
+ * @param {Assets} oldAssets old assets list
  * @returns {Set<string>} diff
  */
 const getDiffToOldAssets = (currentAssets, oldAssets) => {
 	const diff = new Set();
-	for (const asset of oldAssets) {
+	const now = Date.now();
+	for (const [asset, ts] of oldAssets) {
+		if (ts >= now) continue;
 		if (!currentAssets.has(asset)) diff.add(asset);
 	}
 	return diff;
+};
+
+/**
+ * @param {OutputFileSystem} fs filesystem
+ * @param {string} filename path to file
+ * @param {StatsCallback} callback callback for provided filename
+ * @returns {void}
+ */
+const doStat = (fs, filename, callback) => {
+	if ("lstat" in fs) {
+		fs.lstat(filename, callback);
+	} else {
+		fs.stat(filename, callback);
+	}
 };
 
 /**
@@ -103,7 +141,7 @@ const getDiffToOldAssets = (currentAssets, oldAssets) => {
  * @param {Logger} logger logger
  * @param {Set<string>} diff filenames of the assets that shouldn't be there
  * @param {function(string): boolean} isKept check if the entry is ignored
- * @param {function(Error=): void} callback callback
+ * @param {function(Error=, Assets=): void} callback callback
  * @returns {void}
  */
 const applyDiff = (fs, outputPath, dry, logger, diff, isKept, callback) => {
@@ -116,11 +154,13 @@ const applyDiff = (fs, outputPath, dry, logger, diff, isKept, callback) => {
 	};
 	/** @typedef {{ type: "check" | "unlink" | "rmdir", filename: string, parent: { remaining: number, job: Job } | undefined }} Job */
 	/** @type {Job[]} */
-	const jobs = Array.from(diff, filename => ({
+	const jobs = Array.from(diff.keys(), filename => ({
 		type: "check",
 		filename,
 		parent: undefined
 	}));
+	/** @type {Assets} */
+	const keptAssets = new Map();
 	processAsyncTree(
 		jobs,
 		10,
@@ -140,11 +180,12 @@ const applyDiff = (fs, outputPath, dry, logger, diff, isKept, callback) => {
 			switch (type) {
 				case "check":
 					if (isKept(filename)) {
+						keptAssets.set(filename, 0);
 						// do not decrement parent entry as we don't want to delete the parent
 						log(`${filename} will be kept`);
 						return process.nextTick(callback);
 					}
-					fs.stat(path, (err, stats) => {
+					doStat(fs, path, (err, stats) => {
 						if (err) return handleError(err);
 						if (!stats.isDirectory()) {
 							push({
@@ -226,7 +267,10 @@ const applyDiff = (fs, outputPath, dry, logger, diff, isKept, callback) => {
 					break;
 			}
 		},
-		callback
+		err => {
+			if (err) return callback(err);
+			callback(undefined, keptAssets);
+		}
 	);
 };
 
@@ -255,13 +299,9 @@ class CleanPlugin {
 		return hooks;
 	}
 
-	/** @param {CleanOptions} [options] options */
+	/** @param {CleanOptions} options options */
 	constructor(options = {}) {
-		validate(getSchema(), options, {
-			name: "Clean Plugin",
-			baseDataPath: "options"
-		});
-
+		validate(options);
 		this.options = { dry: false, ...options };
 	}
 
@@ -285,6 +325,7 @@ class CleanPlugin {
 		// We assume that no external modification happens while the compiler is active
 		// So we can store the old assets and only diff to them to avoid fs access on
 		// incremental builds
+		/** @type {undefined|Assets} */
 		let oldAssets;
 
 		compiler.hooks.emit.tapAsync(
@@ -305,7 +346,9 @@ class CleanPlugin {
 					);
 				}
 
-				const currentAssets = new Set();
+				/** @type {Assets} */
+				const currentAssets = new Map();
+				const now = Date.now();
 				for (const asset of Object.keys(compilation.assets)) {
 					if (/^[A-Za-z]:\\|^\/|^\\\\/.test(asset)) continue;
 					let normalizedAsset;
@@ -318,7 +361,12 @@ class CleanPlugin {
 						);
 					} while (newNormalizedAsset !== normalizedAsset);
 					if (normalizedAsset.startsWith("../")) continue;
-					currentAssets.add(normalizedAsset);
+					const assetInfo = compilation.assetsInfo.get(asset);
+					if (assetInfo && assetInfo.hotModuleReplacement) {
+						currentAssets.set(normalizedAsset, now + _10sec);
+					} else {
+						currentAssets.set(normalizedAsset, 0);
+					}
 				}
 
 				const outputPath = compilation.getPath(compiler.outputPath, {});
@@ -329,19 +377,34 @@ class CleanPlugin {
 					return keepFn(path);
 				};
 
+				/**
+				 * @param {Error=} err err
+				 * @param {Set<string>=} diff diff
+				 */
 				const diffCallback = (err, diff) => {
 					if (err) {
 						oldAssets = undefined;
-						return callback(err);
-					}
-					applyDiff(fs, outputPath, dry, logger, diff, isKept, err => {
-						if (err) {
-							oldAssets = undefined;
-						} else {
-							oldAssets = currentAssets;
-						}
 						callback(err);
-					});
+						return;
+					}
+					applyDiff(
+						fs,
+						outputPath,
+						dry,
+						logger,
+						diff,
+						isKept,
+						(err, keptAssets) => {
+							if (err) {
+								oldAssets = undefined;
+							} else {
+								if (oldAssets) mergeAssets(currentAssets, oldAssets);
+								oldAssets = currentAssets;
+								if (keptAssets) mergeAssets(oldAssets, keptAssets);
+							}
+							callback(err);
+						}
+					);
 				};
 
 				if (oldAssets) {

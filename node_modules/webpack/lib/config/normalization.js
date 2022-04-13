@@ -92,9 +92,9 @@ const keyedNestedConfig = (value, fn, customKeys) => {
 			? {}
 			: Object.keys(value).reduce(
 					(obj, key) => (
-						(obj[key] = (customKeys && key in customKeys
-							? customKeys[key]
-							: fn)(value[key])),
+						(obj[key] = (
+							customKeys && key in customKeys ? customKeys[key] : fn
+						)(value[key])),
 						obj
 					),
 					/** @type {Record<string, R>} */ ({})
@@ -121,19 +121,26 @@ const getNormalizedWebpackOptions = config => {
 			if (cache === false) return false;
 			if (cache === true) {
 				return {
-					type: "memory"
+					type: "memory",
+					maxGenerations: undefined
 				};
 			}
 			switch (cache.type) {
 				case "filesystem":
 					return {
 						type: "filesystem",
+						allowCollectingMemory: cache.allowCollectingMemory,
+						maxMemoryGenerations: cache.maxMemoryGenerations,
+						maxAge: cache.maxAge,
+						profile: cache.profile,
 						buildDependencies: cloneObject(cache.buildDependencies),
 						cacheDirectory: cache.cacheDirectory,
 						cacheLocation: cache.cacheLocation,
 						hashAlgorithm: cache.hashAlgorithm,
+						compression: cache.compression,
 						idleTimeout: cache.idleTimeout,
 						idleTimeoutForInitialStore: cache.idleTimeoutForInitialStore,
+						idleTimeoutAfterLargeChanges: cache.idleTimeoutAfterLargeChanges,
 						name: cache.name,
 						store: cache.store,
 						version: cache.version
@@ -141,7 +148,8 @@ const getNormalizedWebpackOptions = config => {
 				case undefined:
 				case "memory":
 					return {
-						type: "memory"
+						type: "memory",
+						maxGenerations: cache.maxGenerations
 					};
 				default:
 					// @ts-expect-error Property 'type' does not exist on type 'never'. ts(2339)
@@ -158,12 +166,25 @@ const getNormalizedWebpackOptions = config => {
 			config.entry === undefined
 				? { main: {} }
 				: typeof config.entry === "function"
-				? (fn => () =>
-						Promise.resolve().then(fn).then(getNormalizedEntryStatic))(
-						config.entry
-				  )
+				? (
+						fn => () =>
+							Promise.resolve().then(fn).then(getNormalizedEntryStatic)
+				  )(config.entry)
 				: getNormalizedEntryStatic(config.entry),
-		experiments: cloneObject(config.experiments),
+		experiments: nestedConfig(config.experiments, experiments => ({
+			...experiments,
+			buildHttp: optionalNestedConfig(experiments.buildHttp, options =>
+				Array.isArray(options) ? { allowedUris: options } : options
+			),
+			lazyCompilation: optionalNestedConfig(
+				experiments.lazyCompilation,
+				options =>
+					options === true ? {} : options === false ? undefined : options
+			),
+			css: optionalNestedConfig(experiments.css, options =>
+				options === true ? {} : options === false ? undefined : options
+			)
+		})),
 		externals: config.externals,
 		externalsPresets: cloneObject(config.externalsPresets),
 		externalsType: config.externalsType,
@@ -211,6 +232,7 @@ const getNormalizedWebpackOptions = config => {
 					wrappedContextRegExp: module.wrappedContextRegExp,
 					wrappedContextRecursive: module.wrappedContextRecursive,
 					wrappedContextCritical: module.wrappedContextCritical,
+					// TODO webpack 6 remove
 					strictExportPresence: module.strictExportPresence,
 					strictThisContextOnImports: module.strictThisContextOnImports,
 					...parserOptions
@@ -271,12 +293,15 @@ const getNormalizedWebpackOptions = config => {
 			/** @type {OutputNormalized} */
 			const result = {
 				assetModuleFilename: output.assetModuleFilename,
+				asyncChunks: output.asyncChunks,
 				charset: output.charset,
 				chunkFilename: output.chunkFilename,
 				chunkFormat: output.chunkFormat,
 				chunkLoading: output.chunkLoading,
 				chunkLoadingGlobal: output.chunkLoadingGlobal,
 				chunkLoadTimeout: output.chunkLoadTimeout,
+				cssFilename: output.cssFilename,
+				cssChunkFilename: output.cssChunkFilename,
 				clean: output.clean,
 				compareBeforeEmit: output.compareBeforeEmit,
 				crossOriginLoading: output.crossOriginLoading,
@@ -333,6 +358,15 @@ const getNormalizedWebpackOptions = config => {
 				sourceMapFilename: output.sourceMapFilename,
 				sourcePrefix: output.sourcePrefix,
 				strictModuleExceptionHandling: output.strictModuleExceptionHandling,
+				trustedTypes: optionalNestedConfig(
+					output.trustedTypes,
+					trustedTypes => {
+						if (trustedTypes === true) return {};
+						if (typeof trustedTypes === "string")
+							return { policyName: trustedTypes };
+						return { ...trustedTypes };
+					}
+				),
 				uniqueName: output.uniqueName,
 				wasmLoading: output.wasmLoading,
 				webassemblyModuleFilename: output.webassemblyModuleFilename,
@@ -454,7 +488,10 @@ const getNormalizedEntryStatic = entry => {
 				filename: value.filename,
 				layer: value.layer,
 				runtime: value.runtime,
+				baseUri: value.baseUri,
+				publicPath: value.publicPath,
 				chunkLoading: value.chunkLoading,
+				asyncChunks: value.asyncChunks,
 				wasmLoading: value.wasmLoading,
 				dependOn:
 					value.dependOn &&

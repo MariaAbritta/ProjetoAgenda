@@ -20,7 +20,8 @@ class RemoteRuntimeModule extends RuntimeModule {
 	 * @returns {string} runtime code
 	 */
 	generate() {
-		const { runtimeTemplate, chunkGraph, moduleGraph } = this.compilation;
+		const { compilation, chunkGraph } = this;
+		const { runtimeTemplate, moduleGraph } = compilation;
 		const chunkToRemotesMapping = {};
 		const idToExternalAndNameMapping = {};
 		for (const chunk of this.chunk.getAllAsyncChunks()) {
@@ -72,9 +73,9 @@ class RemoteRuntimeModule extends RuntimeModule {
 							Template.indent(
 								`error.message += '\\nwhile loading "' + data[1] + '" from ' + data[2];`
 							),
-							`__webpack_modules__[id] = ${runtimeTemplate.basicFunction("", [
-								"throw error;"
-							])}`,
+							`${
+								RuntimeGlobals.moduleFactories
+							}[id] = ${runtimeTemplate.basicFunction("", ["throw error;"])}`,
 							"data.p = 0;"
 						])};`,
 						`var handleFunction = ${runtimeTemplate.basicFunction(
@@ -110,10 +111,11 @@ class RemoteRuntimeModule extends RuntimeModule {
 						)};`,
 						`var onFactory = ${runtimeTemplate.basicFunction("factory", [
 							"data.p = 1;",
-							`__webpack_modules__[id] = ${runtimeTemplate.basicFunction(
-								"module",
-								["module.exports = factory();"]
-							)}`
+							`${
+								RuntimeGlobals.moduleFactories
+							}[id] = ${runtimeTemplate.basicFunction("module", [
+								"module.exports = factory();"
+							])}`
 						])};`,
 						"handleFunction(__webpack_require__, data[2], 0, 0, onExternal, 1);"
 					])});`

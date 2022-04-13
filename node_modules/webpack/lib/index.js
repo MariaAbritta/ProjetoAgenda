@@ -11,6 +11,7 @@ const memoize = require("./util/memoize");
 /** @typedef {import("../declarations/WebpackOptions").Entry} Entry */
 /** @typedef {import("../declarations/WebpackOptions").EntryNormalized} EntryNormalized */
 /** @typedef {import("../declarations/WebpackOptions").EntryObject} EntryObject */
+/** @typedef {import("../declarations/WebpackOptions").FileCacheOptions} FileCacheOptions */
 /** @typedef {import("../declarations/WebpackOptions").LibraryOptions} LibraryOptions */
 /** @typedef {import("../declarations/WebpackOptions").ModuleOptions} ModuleOptions */
 /** @typedef {import("../declarations/WebpackOptions").ResolveOptions} ResolveOptions */
@@ -19,16 +20,36 @@ const memoize = require("./util/memoize");
 /** @typedef {import("../declarations/WebpackOptions").RuleSetRule} RuleSetRule */
 /** @typedef {import("../declarations/WebpackOptions").RuleSetUse} RuleSetUse */
 /** @typedef {import("../declarations/WebpackOptions").RuleSetUseItem} RuleSetUseItem */
+/** @typedef {import("../declarations/WebpackOptions").StatsOptions} StatsOptions */
 /** @typedef {import("../declarations/WebpackOptions").WebpackOptions} Configuration */
 /** @typedef {import("../declarations/WebpackOptions").WebpackOptionsNormalized} WebpackOptionsNormalized */
 /** @typedef {import("../declarations/WebpackOptions").WebpackPluginFunction} WebpackPluginFunction */
 /** @typedef {import("../declarations/WebpackOptions").WebpackPluginInstance} WebpackPluginInstance */
 /** @typedef {import("./Compilation").Asset} Asset */
 /** @typedef {import("./Compilation").AssetInfo} AssetInfo */
+/** @typedef {import("./Compilation").EntryOptions} EntryOptions */
+/** @typedef {import("./Compiler").AssetEmittedInfo} AssetEmittedInfo */
 /** @typedef {import("./MultiStats")} MultiStats */
 /** @typedef {import("./Parser").ParserState} ParserState */
+/** @typedef {import("./ResolverFactory").ResolvePluginInstance} ResolvePluginInstance */
+/** @typedef {import("./ResolverFactory").Resolver} Resolver */
 /** @typedef {import("./Watching")} Watching */
+/** @typedef {import("./cli").Argument} Argument */
+/** @typedef {import("./cli").Problem} Problem */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsAsset} StatsAsset */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsChunk} StatsChunk */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsChunkGroup} StatsChunkGroup */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsChunkOrigin} StatsChunkOrigin */
 /** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsCompilation} StatsCompilation */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsError} StatsError */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsLogging} StatsLogging */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsLoggingEntry} StatsLoggingEntry */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsModule} StatsModule */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsModuleIssuer} StatsModuleIssuer */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsModuleReason} StatsModuleReason */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsModuleTraceDependency} StatsModuleTraceDependency */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsModuleTraceItem} StatsModuleTraceItem */
+/** @typedef {import("./stats/DefaultStatsFactoryPlugin").StatsProfile} StatsProfile */
 
 /**
  * @template {Function} T
@@ -37,9 +58,11 @@ const memoize = require("./util/memoize");
  */
 const lazyFunction = factory => {
 	const fac = memoize(factory);
-	const f = /** @type {any} */ ((...args) => {
-		return fac()(...args);
-	});
+	const f = /** @type {any} */ (
+		(...args) => {
+			return fac()(...args);
+		}
+	);
 	return /** @type {T} */ (f);
 };
 
@@ -83,9 +106,15 @@ module.exports = mergeExports(fn, {
 		return require("./webpack");
 	},
 	get validate() {
-		const validateSchema = require("./validateSchema");
-		const webpackOptionsSchema = require("../schemas/WebpackOptions.json");
-		return options => validateSchema(webpackOptionsSchema, options);
+		const webpackOptionsSchemaCheck = require("../schemas/WebpackOptions.check.js");
+		const getRealValidate = memoize(() => {
+			const validateSchema = require("./validateSchema");
+			const webpackOptionsSchema = require("../schemas/WebpackOptions.json");
+			return options => validateSchema(webpackOptionsSchema, options);
+		});
+		return options => {
+			if (!webpackOptionsSchemaCheck(options)) getRealValidate()(options);
+		};
 	},
 	get validateSchema() {
 		const validateSchema = require("./validateSchema");
@@ -100,6 +129,9 @@ module.exports = mergeExports(fn, {
 	},
 	get AutomaticPrefetchPlugin() {
 		return require("./AutomaticPrefetchPlugin");
+	},
+	get AsyncDependenciesBlock() {
+		return require("./AsyncDependenciesBlock");
 	},
 	get BannerPlugin() {
 		return require("./BannerPlugin");
@@ -305,6 +337,18 @@ module.exports = mergeExports(fn, {
 		}
 	},
 
+	dependencies: {
+		get ModuleDependency() {
+			return require("./dependencies/ModuleDependency");
+		},
+		get ConstDependency() {
+			return require("./dependencies/ConstDependency");
+		},
+		get NullDependency() {
+			return require("./dependencies/NullDependency");
+		}
+	},
+
 	ids: {
 		get ChunkModuleIdRangePlugin() {
 			return require("./ids/ChunkModuleIdRangePlugin");
@@ -357,6 +401,9 @@ module.exports = mergeExports(fn, {
 				"AggressiveSplittingPlugin is deprecated in favor of SplitChunksPlugin",
 				"DEP_WEBPACK_AGGRESSIVE_SPLITTING_PLUGIN"
 			)();
+		},
+		get InnerGraph() {
+			return require("./optimize/InnerGraph");
 		},
 		get LimitChunkCountPlugin() {
 			return require("./optimize/LimitChunkCountPlugin");
@@ -499,6 +546,9 @@ module.exports = mergeExports(fn, {
 		get comparators() {
 			return require("./util/comparators");
 		},
+		get runtime() {
+			return require("./util/runtime");
+		},
 		get serialization() {
 			return require("./util/serialization");
 		},
@@ -518,9 +568,11 @@ module.exports = mergeExports(fn, {
 		schemes: {
 			get HttpUriPlugin() {
 				return require("./schemes/HttpUriPlugin");
-			},
-			get HttpsUriPlugin() {
-				return require("./schemes/HttpsUriPlugin");
+			}
+		},
+		ids: {
+			get SyncModuleIdsPlugin() {
+				return require("./ids/SyncModuleIdsPlugin");
 			}
 		}
 	}

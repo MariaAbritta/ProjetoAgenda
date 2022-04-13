@@ -29,8 +29,22 @@ const { registerNotSerializable } = require("../util/serialization");
 /** @typedef {import("../RequestShortener")} RequestShortener */
 /** @typedef {import("../ResolverFactory").ResolverWithOptions} ResolverWithOptions */
 /** @typedef {import("../WebpackError")} WebpackError */
+/** @typedef {import("../dependencies/HarmonyImportDependency")} HarmonyImportDependency */
 /** @typedef {import("../util/Hash")} Hash */
 /** @typedef {import("../util/fs").InputFileSystem} InputFileSystem */
+
+/**
+ * @typedef {Object} BackendApi
+ * @property {function(Error=): void} dispose
+ * @property {function(Module): { client: string, data: string, active: boolean }} module
+ */
+
+const HMR_DEPENDENCY_TYPES = new Set([
+	"import.meta.webpackHot.accept",
+	"import.meta.webpackHot.decline",
+	"module.hot.accept",
+	"module.hot.decline"
+]);
 
 /**
  * @param {undefined|string|RegExp|Function} test test option
@@ -56,9 +70,9 @@ const checkTest = (test, module) => {
 const TYPES = new Set(["javascript"]);
 
 class LazyCompilationDependency extends Dependency {
-	constructor(originalModule) {
+	constructor(proxyModule) {
 		super();
-		this.originalModule = originalModule;
+		this.proxyModule = proxyModule;
 	}
 
 	get category() {
@@ -73,7 +87,7 @@ class LazyCompilationDependency extends Dependency {
 	 * @returns {string | null} an identifier to merge equal requests
 	 */
 	getResourceIdentifier() {
-		return this.originalModule.identifier();
+		return this.proxyModule.originalModule.identifier();
 	}
 }
 
@@ -116,6 +130,10 @@ class LazyCompilationProxyModule extends Module {
 	updateCacheModule(module) {
 		super.updateCacheModule(module);
 		const m = /** @type {LazyCompilationProxyModule} */ (module);
+		this.originalModule = m.originalModule;
+		this.request = m.request;
+		this.client = m.client;
+		this.data = m.data;
 		this.active = m.active;
 	}
 
@@ -129,7 +147,7 @@ class LazyCompilationProxyModule extends Module {
 
 	/**
 	 * @param {NeedBuildContext} context context info
-	 * @param {function(WebpackError=, boolean=): void} callback callback function, returns true, if the module needs a rebuild
+	 * @param {function((WebpackError | null)=, boolean=): void} callback callback function, returns true, if the module needs a rebuild
 	 * @returns {void}
 	 */
 	needBuild(context, callback) {
@@ -154,7 +172,7 @@ class LazyCompilationProxyModule extends Module {
 		const dep = new CommonJsRequireDependency(this.client);
 		this.addDependency(dep);
 		if (this.active) {
-			const dep = new LazyCompilationDependency(this.originalModule);
+			const dep = new LazyCompilationDependency(this);
 			const block = new AsyncDependenciesBlock({});
 			block.addDependency(dep);
 			this.addBlock(block);
@@ -185,8 +203,9 @@ class LazyCompilationProxyModule extends Module {
 		const sources = new Map();
 		const runtimeRequirements = new Set();
 		runtimeRequirements.add(RuntimeGlobals.module);
-		const clientDep = /** @type {CommonJsRequireDependency} */ (this
-			.dependencies[0]);
+		const clientDep = /** @type {CommonJsRequireDependency} */ (
+			this.dependencies[0]
+		);
 		const clientModule = moduleGraph.getModule(clientDep);
 		const block = this.blocks[0];
 		const client = Template.asString([
@@ -279,10 +298,11 @@ class LazyCompilationDependencyFactory extends ModuleFactory {
 	 * @returns {void}
 	 */
 	create(data, callback) {
-		const dependency = /** @type {LazyCompilationDependency} */ (data
-			.dependencies[0]);
+		const dependency = /** @type {LazyCompilationDependency} */ (
+			data.dependencies[0]
+		);
 		callback(null, {
-			module: dependency.originalModule
+			module: dependency.proxyModule.originalModule
 		});
 	}
 }
@@ -290,15 +310,13 @@ class LazyCompilationDependencyFactory extends ModuleFactory {
 class LazyCompilationPlugin {
 	/**
 	 * @param {Object} options options
-	 * @param {(function(Compiler, string, function(Error?, any?): void): void) | function(Compiler, string): Promise<any>} options.backend the backend
-	 * @param {string} options.client the client reference
+	 * @param {(function(Compiler, function(Error?, BackendApi?): void): void) | function(Compiler): Promise<BackendApi>} options.backend the backend
 	 * @param {boolean} options.entries true, when entries are lazy compiled
 	 * @param {boolean} options.imports true, when import() modules are lazy compiled
 	 * @param {RegExp | string | (function(Module): boolean)} options.test additional filter for lazy compiled entrypoint modules
 	 */
-	constructor({ backend, client, entries, imports, test }) {
+	constructor({ backend, entries, imports, test }) {
 		this.backend = backend;
-		this.client = client;
 		this.entries = entries;
 		this.imports = imports;
 		this.test = test;
@@ -314,7 +332,7 @@ class LazyCompilationPlugin {
 			"LazyCompilationPlugin",
 			(params, callback) => {
 				if (backend !== undefined) return callback();
-				const promise = this.backend(compiler, this.client, (err, result) => {
+				const promise = this.backend(compiler, (err, result) => {
 					if (err) return callback(err);
 					backend = result;
 					callback();
@@ -334,29 +352,55 @@ class LazyCompilationPlugin {
 					"LazyCompilationPlugin",
 					(originalModule, createData, resolveData) => {
 						if (
-							resolveData.dependencies.every(
-								dep =>
-									(this.imports && dep.type === "import()") ||
-									(this.entries && dep.type === "entry")
-							) &&
-							!/webpack[/\\]hot[/\\]|webpack-dev-server[/\\]client/.test(
-								resolveData.request
-							) &&
-							checkTest(this.test, originalModule)
+							resolveData.dependencies.every(dep =>
+								HMR_DEPENDENCY_TYPES.has(dep.type)
+							)
 						) {
-							const moduleInfo = backend.module(originalModule);
-							if (!moduleInfo) return;
-							const { client, data, active } = moduleInfo;
-
-							return new LazyCompilationProxyModule(
-								compiler.context,
-								originalModule,
-								resolveData.request,
-								client,
-								data,
-								active
+							// for HMR only resolving, try to determine if the HMR accept/decline refers to
+							// an import() or not
+							const hmrDep = resolveData.dependencies[0];
+							const originModule =
+								compilation.moduleGraph.getParentModule(hmrDep);
+							const isReferringToDynamicImport = originModule.blocks.some(
+								block =>
+									block.dependencies.some(
+										dep =>
+											dep.type === "import()" &&
+											/** @type {HarmonyImportDependency} */ (dep).request ===
+												hmrDep.request
+									)
 							);
-						}
+							if (!isReferringToDynamicImport) return;
+						} else if (
+							!resolveData.dependencies.every(
+								dep =>
+									HMR_DEPENDENCY_TYPES.has(dep.type) ||
+									(this.imports &&
+										(dep.type === "import()" ||
+											dep.type === "import() context element")) ||
+									(this.entries && dep.type === "entry")
+							)
+						)
+							return;
+						if (
+							/webpack[/\\]hot[/\\]|webpack-dev-server[/\\]client|webpack-hot-middleware[/\\]client/.test(
+								resolveData.request
+							) ||
+							!checkTest(this.test, originalModule)
+						)
+							return;
+						const moduleInfo = backend.module(originalModule);
+						if (!moduleInfo) return;
+						const { client, data, active } = moduleInfo;
+
+						return new LazyCompilationProxyModule(
+							compiler.context,
+							originalModule,
+							resolveData.request,
+							client,
+							data,
+							active
+						);
 					}
 				);
 				compilation.dependencyFactories.set(

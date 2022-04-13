@@ -7,22 +7,25 @@
 
 const ModuleFilenameHelpers = require("./ModuleFilenameHelpers");
 const NormalModule = require("./NormalModule");
-
-const { validate } = require("schema-utils");
-const schema = require("../schemas/plugins/LoaderOptionsPlugin.json");
+const createSchemaValidation = require("./util/create-schema-validation");
 
 /** @typedef {import("../declarations/plugins/LoaderOptionsPlugin").LoaderOptionsPluginOptions} LoaderOptionsPluginOptions */
 /** @typedef {import("./Compiler")} Compiler */
 
+const validate = createSchemaValidation(
+	require("../schemas/plugins/LoaderOptionsPlugin.check.js"),
+	() => require("../schemas/plugins/LoaderOptionsPlugin.json"),
+	{
+		name: "Loader Options Plugin",
+		baseDataPath: "options"
+	}
+);
 class LoaderOptionsPlugin {
 	/**
 	 * @param {LoaderOptionsPluginOptions} options options object
 	 */
 	constructor(options = {}) {
-		validate(schema, options, {
-			name: "Loader Options Plugin",
-			baseDataPath: "options"
-		});
+		validate(options);
 		if (typeof options !== "object") options = {};
 		if (!options.test) {
 			options.test = {
@@ -49,7 +52,7 @@ class LoaderOptionsPlugin {
 					if (
 						ModuleFilenameHelpers.matchObject(
 							options,
-							i < 0 ? resource : resource.substr(0, i)
+							i < 0 ? resource : resource.slice(0, i)
 						)
 					) {
 						for (const key of Object.keys(options)) {

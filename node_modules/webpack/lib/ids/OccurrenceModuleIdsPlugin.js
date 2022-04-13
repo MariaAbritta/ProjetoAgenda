@@ -5,27 +5,35 @@
 
 "use strict";
 
-const { validate } = require("schema-utils");
-const schema = require("../../schemas/plugins/ids/OccurrenceModuleIdsPlugin.json");
 const {
 	compareModulesByPreOrderIndexOrIdentifier
 } = require("../util/comparators");
-const { assignAscendingModuleIds } = require("./IdHelpers");
+const createSchemaValidation = require("../util/create-schema-validation");
+const {
+	assignAscendingModuleIds,
+	getUsedModuleIdsAndModules
+} = require("./IdHelpers");
 
 /** @typedef {import("../../declarations/plugins/ids/OccurrenceModuleIdsPlugin").OccurrenceModuleIdsPluginOptions} OccurrenceModuleIdsPluginOptions */
 /** @typedef {import("../Compiler")} Compiler */
 /** @typedef {import("../Module")} Module */
 /** @typedef {import("../ModuleGraphConnection")} ModuleGraphConnection */
 
+const validate = createSchemaValidation(
+	require("../../schemas/plugins/ids/OccurrenceModuleIdsPlugin.check.js"),
+	() => require("../../schemas/plugins/ids/OccurrenceModuleIdsPlugin.json"),
+	{
+		name: "Occurrence Order Module Ids Plugin",
+		baseDataPath: "options"
+	}
+);
+
 class OccurrenceModuleIdsPlugin {
 	/**
 	 * @param {OccurrenceModuleIdsPluginOptions=} options options object
 	 */
 	constructor(options = {}) {
-		validate(schema, options, {
-			name: "Occurrence Order Module Ids Plugin",
-			baseDataPath: "options"
-		});
+		validate(options);
 		this.options = options;
 	}
 
@@ -39,15 +47,11 @@ class OccurrenceModuleIdsPlugin {
 		compiler.hooks.compilation.tap("OccurrenceModuleIdsPlugin", compilation => {
 			const moduleGraph = compilation.moduleGraph;
 
-			compilation.hooks.moduleIds.tap("OccurrenceModuleIdsPlugin", modules => {
+			compilation.hooks.moduleIds.tap("OccurrenceModuleIdsPlugin", () => {
 				const chunkGraph = compilation.chunkGraph;
 
-				const modulesInOccurrenceOrder = Array.from(modules).filter(
-					m =>
-						m.needId &&
-						chunkGraph.getNumberOfModuleChunks(m) > 0 &&
-						chunkGraph.getModuleId(m) === null
-				);
+				const [usedIds, modulesInOccurrenceOrder] =
+					getUsedModuleIdsAndModules(compilation);
 
 				const occursInInitialChunksMap = new Map();
 				const occursInAllChunksMap = new Map();
@@ -93,9 +97,8 @@ class OccurrenceModuleIdsPlugin {
 						connections
 					] of moduleGraph.getIncomingConnectionsByOriginModule(module)) {
 						if (!originModule) continue;
-						const chunkModules = chunkGraph.getNumberOfModuleChunks(
-							originModule
-						);
+						const chunkModules =
+							chunkGraph.getNumberOfModuleChunks(originModule);
 						for (const c of connections) {
 							if (!c.isTargetActive(undefined)) continue;
 							if (!c.dependency) continue;
@@ -117,7 +120,7 @@ class OccurrenceModuleIdsPlugin {
 					}
 				}
 
-				for (const m of modules) {
+				for (const m of modulesInOccurrenceOrder) {
 					const result =
 						countOccurs(m) +
 						chunkGraph.getNumberOfModuleChunks(m) +
@@ -143,7 +146,11 @@ class OccurrenceModuleIdsPlugin {
 					return naturalCompare(a, b);
 				});
 
-				assignAscendingModuleIds(modulesInOccurrenceOrder, compilation);
+				assignAscendingModuleIds(
+					usedIds,
+					modulesInOccurrenceOrder,
+					compilation
+				);
 			});
 		});
 	}

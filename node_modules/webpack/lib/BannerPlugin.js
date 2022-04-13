@@ -5,17 +5,24 @@
 
 "use strict";
 
-const { validate } = require("schema-utils");
 const { ConcatSource } = require("webpack-sources");
 const Compilation = require("./Compilation");
 const ModuleFilenameHelpers = require("./ModuleFilenameHelpers");
 const Template = require("./Template");
-
-const schema = require("../schemas/plugins/BannerPlugin.json");
+const createSchemaValidation = require("./util/create-schema-validation");
 
 /** @typedef {import("../declarations/plugins/BannerPlugin").BannerPluginArgument} BannerPluginArgument */
 /** @typedef {import("../declarations/plugins/BannerPlugin").BannerPluginOptions} BannerPluginOptions */
 /** @typedef {import("./Compiler")} Compiler */
+
+const validate = createSchemaValidation(
+	require("../schemas/plugins/BannerPlugin.check.js"),
+	() => require("../schemas/plugins/BannerPlugin.json"),
+	{
+		name: "Banner Plugin",
+		baseDataPath: "options"
+	}
+);
 
 const wrapComment = str => {
 	if (!str.includes("\n")) {
@@ -40,10 +47,7 @@ class BannerPlugin {
 			};
 		}
 
-		validate(schema, options, {
-			name: "Banner Plugin",
-			baseDataPath: "options"
-		});
+		validate(options);
 
 		this.options = options;
 
@@ -73,6 +77,7 @@ class BannerPlugin {
 			undefined,
 			options
 		);
+		const cache = new WeakMap();
 
 		compiler.hooks.compilation.tap("BannerPlugin", compilation => {
 			compilation.hooks.processAssets.tap(
@@ -98,10 +103,17 @@ class BannerPlugin {
 
 							const comment = compilation.getPath(banner, data);
 
-							compilation.updateAsset(
-								file,
-								old => new ConcatSource(comment, "\n", old)
-							);
+							compilation.updateAsset(file, old => {
+								let cached = cache.get(old);
+								if (!cached || cached.comment !== comment) {
+									const source = options.footer
+										? new ConcatSource(old, "\n", comment)
+										: new ConcatSource(comment, "\n", old);
+									cache.set(old, { source, comment });
+									return source;
+								}
+								return cached.source;
+							});
 						}
 					}
 				}

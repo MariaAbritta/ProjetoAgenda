@@ -6,17 +6,22 @@
 "use strict";
 
 const RuntimeGlobals = require("./RuntimeGlobals");
+const { getChunkFilenameTemplate } = require("./css/CssModulesPlugin");
 const RuntimeRequirementsDependency = require("./dependencies/RuntimeRequirementsDependency");
 const JavascriptModulesPlugin = require("./javascript/JavascriptModulesPlugin");
 const AsyncModuleRuntimeModule = require("./runtime/AsyncModuleRuntimeModule");
 const AutoPublicPathRuntimeModule = require("./runtime/AutoPublicPathRuntimeModule");
+const BaseUriRuntimeModule = require("./runtime/BaseUriRuntimeModule");
 const CompatGetDefaultExportRuntimeModule = require("./runtime/CompatGetDefaultExportRuntimeModule");
 const CompatRuntimeModule = require("./runtime/CompatRuntimeModule");
 const CreateFakeNamespaceObjectRuntimeModule = require("./runtime/CreateFakeNamespaceObjectRuntimeModule");
+const CreateScriptRuntimeModule = require("./runtime/CreateScriptRuntimeModule");
+const CreateScriptUrlRuntimeModule = require("./runtime/CreateScriptUrlRuntimeModule");
 const DefinePropertyGettersRuntimeModule = require("./runtime/DefinePropertyGettersRuntimeModule");
 const EnsureChunkRuntimeModule = require("./runtime/EnsureChunkRuntimeModule");
 const GetChunkFilenameRuntimeModule = require("./runtime/GetChunkFilenameRuntimeModule");
 const GetMainFilenameRuntimeModule = require("./runtime/GetMainFilenameRuntimeModule");
+const GetTrustedTypesPolicyRuntimeModule = require("./runtime/GetTrustedTypesPolicyRuntimeModule");
 const GlobalRuntimeModule = require("./runtime/GlobalRuntimeModule");
 const HasOwnPropertyRuntimeModule = require("./runtime/HasOwnPropertyRuntimeModule");
 const LoadScriptRuntimeModule = require("./runtime/LoadScriptRuntimeModule");
@@ -38,6 +43,9 @@ const GLOBALS_ON_REQUIRE = [
 	RuntimeGlobals.runtimeId,
 	RuntimeGlobals.compatGetDefaultExport,
 	RuntimeGlobals.createFakeNamespaceObject,
+	RuntimeGlobals.createScript,
+	RuntimeGlobals.createScriptUrl,
+	RuntimeGlobals.getTrustedTypesPolicy,
 	RuntimeGlobals.definePropertyGetters,
 	RuntimeGlobals.ensureChunk,
 	RuntimeGlobals.entryModuleId,
@@ -89,6 +97,15 @@ class RuntimePlugin {
 	 */
 	apply(compiler) {
 		compiler.hooks.compilation.tap("RuntimePlugin", compilation => {
+			const globalChunkLoading = compilation.outputOptions.chunkLoading;
+			const isChunkLoadingDisabledForChunk = chunk => {
+				const options = chunk.getEntryOptions();
+				const chunkLoading =
+					options && options.chunkLoading !== undefined
+						? options.chunkLoading
+						: globalChunkLoading;
+				return chunkLoading === false;
+			};
 			compilation.dependencyTemplates.set(
 				RuntimeRequirementsDependency,
 				new RuntimeRequirementsDependency.Template()
@@ -176,14 +193,19 @@ class RuntimePlugin {
 				.for(RuntimeGlobals.publicPath)
 				.tap("RuntimePlugin", (chunk, set) => {
 					const { outputOptions } = compilation;
-					const { publicPath, scriptType } = outputOptions;
+					const { publicPath: globalPublicPath, scriptType } = outputOptions;
+					const entryOptions = chunk.getEntryOptions();
+					const publicPath =
+						entryOptions && entryOptions.publicPath !== undefined
+							? entryOptions.publicPath
+							: globalPublicPath;
 
 					if (publicPath === "auto") {
 						const module = new AutoPublicPathRuntimeModule();
 						if (scriptType !== "module") set.add(RuntimeGlobals.global);
 						compilation.addRuntimeModule(chunk, module);
 					} else {
-						const module = new PublicPathRuntimeModule();
+						const module = new PublicPathRuntimeModule(publicPath);
 
 						if (
 							typeof publicPath !== "string" ||
@@ -211,7 +233,15 @@ class RuntimePlugin {
 			compilation.hooks.runtimeRequirementInTree
 				.for(RuntimeGlobals.systemContext)
 				.tap("RuntimePlugin", chunk => {
-					if (compilation.outputOptions.library.type === "system") {
+					const { outputOptions } = compilation;
+					const { library: globalLibrary } = outputOptions;
+					const entryOptions = chunk.getEntryOptions();
+					const libraryType =
+						entryOptions && entryOptions.library !== undefined
+							? entryOptions.library.type
+							: globalLibrary.type;
+
+					if (libraryType === "system") {
 						compilation.addRuntimeModule(
 							chunk,
 							new SystemContextRuntimeModule()
@@ -242,6 +272,30 @@ class RuntimePlugin {
 									? compilation.outputOptions.filename
 									: compilation.outputOptions.chunkFilename),
 							false
+						)
+					);
+					return true;
+				});
+			compilation.hooks.runtimeRequirementInTree
+				.for(RuntimeGlobals.getChunkCssFilename)
+				.tap("RuntimePlugin", (chunk, set) => {
+					if (
+						typeof compilation.outputOptions.cssChunkFilename === "string" &&
+						/\[(full)?hash(:\d+)?\]/.test(
+							compilation.outputOptions.cssChunkFilename
+						)
+					) {
+						set.add(RuntimeGlobals.getFullHash);
+					}
+					compilation.addRuntimeModule(
+						chunk,
+						new GetChunkFilenameRuntimeModule(
+							"css",
+							"css",
+							RuntimeGlobals.getChunkCssFilename,
+							chunk =>
+								getChunkFilenameTemplate(chunk, compilation.outputOptions),
+							set.has(RuntimeGlobals.hmrDownloadUpdateHandlers)
 						)
 					);
 					return true;
@@ -314,7 +368,44 @@ class RuntimePlugin {
 			compilation.hooks.runtimeRequirementInTree
 				.for(RuntimeGlobals.loadScript)
 				.tap("RuntimePlugin", (chunk, set) => {
-					compilation.addRuntimeModule(chunk, new LoadScriptRuntimeModule());
+					const withCreateScriptUrl = !!compilation.outputOptions.trustedTypes;
+					if (withCreateScriptUrl) {
+						set.add(RuntimeGlobals.createScriptUrl);
+					}
+					compilation.addRuntimeModule(
+						chunk,
+						new LoadScriptRuntimeModule(withCreateScriptUrl)
+					);
+					return true;
+				});
+			compilation.hooks.runtimeRequirementInTree
+				.for(RuntimeGlobals.createScript)
+				.tap("RuntimePlugin", (chunk, set) => {
+					if (compilation.outputOptions.trustedTypes) {
+						set.add(RuntimeGlobals.getTrustedTypesPolicy);
+					}
+					compilation.addRuntimeModule(chunk, new CreateScriptRuntimeModule());
+					return true;
+				});
+			compilation.hooks.runtimeRequirementInTree
+				.for(RuntimeGlobals.createScriptUrl)
+				.tap("RuntimePlugin", (chunk, set) => {
+					if (compilation.outputOptions.trustedTypes) {
+						set.add(RuntimeGlobals.getTrustedTypesPolicy);
+					}
+					compilation.addRuntimeModule(
+						chunk,
+						new CreateScriptUrlRuntimeModule()
+					);
+					return true;
+				});
+			compilation.hooks.runtimeRequirementInTree
+				.for(RuntimeGlobals.getTrustedTypesPolicy)
+				.tap("RuntimePlugin", (chunk, set) => {
+					compilation.addRuntimeModule(
+						chunk,
+						new GetTrustedTypesPolicyRuntimeModule(set)
+					);
 					return true;
 				});
 			compilation.hooks.runtimeRequirementInTree
@@ -331,6 +422,14 @@ class RuntimePlugin {
 						new OnChunksLoadedRuntimeModule()
 					);
 					return true;
+				});
+			compilation.hooks.runtimeRequirementInTree
+				.for(RuntimeGlobals.baseURI)
+				.tap("RuntimePlugin", chunk => {
+					if (isChunkLoadingDisabledForChunk(chunk)) {
+						compilation.addRuntimeModule(chunk, new BaseUriRuntimeModule());
+						return true;
+					}
 				});
 			// TODO webpack 6: remove CompatRuntimeModule
 			compilation.hooks.additionalTreeRuntimeRequirements.tap(

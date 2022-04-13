@@ -5,13 +5,20 @@
 "use strict";
 
 const { Tracer } = require("chrome-trace-event");
-const { validate } = require("schema-utils");
-const schema = require("../../schemas/plugins/debug/ProfilingPlugin.json");
+const createSchemaValidation = require("../util/create-schema-validation");
 const { dirname, mkdirpSync } = require("../util/fs");
 
 /** @typedef {import("../../declarations/plugins/debug/ProfilingPlugin").ProfilingPluginOptions} ProfilingPluginOptions */
 /** @typedef {import("../util/fs").IntermediateFileSystem} IntermediateFileSystem */
 
+const validate = createSchemaValidation(
+	require("../../schemas/plugins/debug/ProfilingPlugin.check.js"),
+	() => require("../../schemas/plugins/debug/ProfilingPlugin.json"),
+	{
+		name: "Profiling Plugin",
+		baseDataPath: "options"
+	}
+);
 let inspector = undefined;
 
 try {
@@ -116,9 +123,7 @@ class Profiler {
  * @returns {Trace} The trace object
  */
 const createTrace = (fs, outputPath) => {
-	const trace = new Tracer({
-		noStream: true
-	});
+	const trace = new Tracer();
 	const profiler = new Profiler(inspector);
 	if (/\/|\\/.test(outputPath)) {
 		const dirPath = dirname(fs, outputPath);
@@ -166,6 +171,7 @@ const createTrace = (fs, outputPath) => {
 		counter,
 		profiler,
 		end: callback => {
+			trace.push("]");
 			// Wait until the write stream finishes.
 			fsStream.on("close", () => {
 				callback();
@@ -183,10 +189,7 @@ class ProfilingPlugin {
 	 * @param {ProfilingPluginOptions=} options options object
 	 */
 	constructor(options = {}) {
-		validate(schema, options, {
-			name: "Profiling Plugin",
-			baseDataPath: "options"
-		});
+		validate(options);
 		this.outputPath = options.outputPath || "events.json";
 	}
 
@@ -199,15 +202,17 @@ class ProfilingPlugin {
 
 		// Compiler Hooks
 		Object.keys(compiler.hooks).forEach(hookName => {
-			compiler.hooks[hookName].intercept(
-				makeInterceptorFor("Compiler", tracer)(hookName)
-			);
+			const hook = compiler.hooks[hookName];
+			if (hook) {
+				hook.intercept(makeInterceptorFor("Compiler", tracer)(hookName));
+			}
 		});
 
 		Object.keys(compiler.resolverFactory.hooks).forEach(hookName => {
-			compiler.resolverFactory.hooks[hookName].intercept(
-				makeInterceptorFor("Resolver", tracer)(hookName)
-			);
+			const hook = compiler.resolverFactory.hooks[hookName];
+			if (hook) {
+				hook.intercept(makeInterceptorFor("Resolver", tracer)(hookName));
+			}
 		});
 
 		compiler.hooks.compilation.tap(
@@ -236,10 +241,10 @@ class ProfilingPlugin {
 				stage: Infinity
 			},
 			(stats, callback) => {
+				if (compiler.watchMode) return callback();
 				tracer.profiler.stopProfiling().then(parsedResults => {
 					if (parsedResults === undefined) {
 						tracer.profiler.destroy();
-						tracer.trace.flush();
 						tracer.end(callback);
 						return;
 					}
@@ -287,7 +292,6 @@ class ProfilingPlugin {
 					});
 
 					tracer.profiler.destroy();
-					tracer.trace.flush();
 					tracer.end(callback);
 				});
 			}
@@ -299,7 +303,7 @@ const interceptAllHooksFor = (instance, tracer, logLabel) => {
 	if (Reflect.has(instance, "hooks")) {
 		Object.keys(instance.hooks).forEach(hookName => {
 			const hook = instance.hooks[hookName];
-			if (!hook._fakeHook) {
+			if (hook && !hook._fakeHook) {
 				hook.intercept(makeInterceptorFor(logLabel, tracer)(hookName));
 			}
 		});
@@ -328,9 +332,10 @@ const interceptAllParserHooks = (moduleFactory, tracer) => {
 const interceptAllJavascriptModulesPluginHooks = (compilation, tracer) => {
 	interceptAllHooksFor(
 		{
-			hooks: require("../javascript/JavascriptModulesPlugin").getCompilationHooks(
-				compilation
-			)
+			hooks:
+				require("../javascript/JavascriptModulesPlugin").getCompilationHooks(
+					compilation
+				)
 		},
 		tracer,
 		"JavascriptModulesPlugin"
@@ -338,16 +343,19 @@ const interceptAllJavascriptModulesPluginHooks = (compilation, tracer) => {
 };
 
 const makeInterceptorFor = (instance, tracer) => hookName => ({
-	register: ({ name, type, context, fn }) => {
-		const newFn = makeNewProfiledTapFn(hookName, tracer, {
-			name,
-			type,
-			fn
-		});
+	register: tapInfo => {
+		const { name, type, fn } = tapInfo;
+		const newFn =
+			// Don't tap our own hooks to ensure stream can close cleanly
+			name === pluginName
+				? fn
+				: makeNewProfiledTapFn(hookName, tracer, {
+						name,
+						type,
+						fn
+				  });
 		return {
-			name,
-			type,
-			context,
+			...tapInfo,
 			fn: newFn
 		};
 	}

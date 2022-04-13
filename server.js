@@ -31,5 +31,3 @@ app.on("Pronto.", () => {
     console.log('Servidor executando na porta 3000');
   });
 });
-
-

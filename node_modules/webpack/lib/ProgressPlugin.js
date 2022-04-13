@@ -5,17 +5,24 @@
 
 "use strict";
 
-const { validate } = require("schema-utils");
-const schema = require("../schemas/plugins/ProgressPlugin.json");
 const Compiler = require("./Compiler");
 const MultiCompiler = require("./MultiCompiler");
 const NormalModule = require("./NormalModule");
+const createSchemaValidation = require("./util/create-schema-validation");
 const { contextify } = require("./util/identifier");
 
 /** @typedef {import("../declarations/plugins/ProgressPlugin").HandlerFunction} HandlerFunction */
 /** @typedef {import("../declarations/plugins/ProgressPlugin").ProgressPluginArgument} ProgressPluginArgument */
 /** @typedef {import("../declarations/plugins/ProgressPlugin").ProgressPluginOptions} ProgressPluginOptions */
 
+const validate = createSchemaValidation(
+	require("../schemas/plugins/ProgressPlugin.check.js"),
+	() => require("../schemas/plugins/ProgressPlugin.json"),
+	{
+		name: "Progress Plugin",
+		baseDataPath: "options"
+	}
+);
 const median3 = (a, b, c) => {
 	return a + b + c - Math.max(a, b, c) - Math.min(a, b, c);
 };
@@ -89,7 +96,7 @@ const createDefaultHandler = (profile, logger) => {
 /**
  * @callback ReportProgress
  * @param {number} p
- * @param {...string[]} [args]
+ * @param {...string} [args]
  * @returns {void}
  */
 
@@ -115,10 +122,7 @@ class ProgressPlugin {
 			};
 		}
 
-		validate(schema, options, {
-			name: "Progress Plugin",
-			baseDataPath: "options"
-		});
+		validate(options);
 		options = { ...ProgressPlugin.defaultOptions, ...options };
 
 		this.profile = options.profile;
@@ -527,15 +531,14 @@ class ProgressPlugin {
 			}
 		});
 		interceptHook(compiler.cache.hooks.endIdle, 0.01, "cache", "end idle");
-		compiler.hooks.initialize.intercept({
+		compiler.hooks.beforeRun.intercept({
 			name: "ProgressPlugin",
 			call() {
 				handler(0, "");
 			}
 		});
-		interceptHook(compiler.hooks.initialize, 0.01, "setup", "initialize");
-		interceptHook(compiler.hooks.beforeRun, 0.02, "setup", "before run");
-		interceptHook(compiler.hooks.run, 0.03, "setup", "run");
+		interceptHook(compiler.hooks.beforeRun, 0.01, "setup", "before run");
+		interceptHook(compiler.hooks.run, 0.02, "setup", "run");
 		interceptHook(compiler.hooks.watchRun, 0.03, "setup", "watch run");
 		interceptHook(
 			compiler.hooks.normalModuleFactory,

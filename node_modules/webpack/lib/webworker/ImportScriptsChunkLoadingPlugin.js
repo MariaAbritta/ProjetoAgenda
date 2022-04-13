@@ -29,7 +29,9 @@ class ImportScriptsChunkLoadingPlugin {
 				const isEnabledForChunk = chunk => {
 					const options = chunk.getEntryOptions();
 					const chunkLoading =
-						(options && options.chunkLoading) || globalChunkLoading;
+						options && options.chunkLoading !== undefined
+							? options.chunkLoading
+							: globalChunkLoading;
 					return chunkLoading === "import-scripts";
 				};
 				const onceForChunkSet = new WeakSet();
@@ -37,11 +39,15 @@ class ImportScriptsChunkLoadingPlugin {
 					if (onceForChunkSet.has(chunk)) return;
 					onceForChunkSet.add(chunk);
 					if (!isEnabledForChunk(chunk)) return;
+					const withCreateScriptUrl = !!compilation.outputOptions.trustedTypes;
 					set.add(RuntimeGlobals.moduleFactoriesAddOnly);
 					set.add(RuntimeGlobals.hasOwnProperty);
+					if (withCreateScriptUrl) {
+						set.add(RuntimeGlobals.createScriptUrl);
+					}
 					compilation.addRuntimeModule(
 						chunk,
-						new ImportScriptsChunkLoadingRuntimeModule(set)
+						new ImportScriptsChunkLoadingRuntimeModule(set, withCreateScriptUrl)
 					);
 				};
 				compilation.hooks.runtimeRequirementInTree

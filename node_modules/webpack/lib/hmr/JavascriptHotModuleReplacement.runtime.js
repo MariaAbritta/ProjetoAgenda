@@ -207,7 +207,7 @@ module.exports = function () {
 			var module = $moduleCache$[outdatedModuleId];
 			if (
 				module &&
-				module.hot._selfAccepted &&
+				(module.hot._selfAccepted || module.hot._main) &&
 				// removed self-accepted modules should not be required
 				appliedUpdate[outdatedModuleId] !== warnUnexpectedRequire &&
 				// when called invalidate self-accepting is not possible
@@ -443,15 +443,16 @@ module.exports = function () {
 			) {
 				promises.push($loadUpdateChunk$(chunkId, updatedModulesList));
 				currentUpdateChunks[chunkId] = true;
+			} else {
+				currentUpdateChunks[chunkId] = false;
 			}
 		});
 		if ($ensureChunkHandlers$) {
 			$ensureChunkHandlers$.$key$Hmr = function (chunkId, promises) {
 				if (
 					currentUpdateChunks &&
-					!$hasOwnProperty$(currentUpdateChunks, chunkId) &&
-					$hasOwnProperty$($installedChunks$, chunkId) &&
-					$installedChunks$[chunkId] !== undefined
+					$hasOwnProperty$(currentUpdateChunks, chunkId) &&
+					!currentUpdateChunks[chunkId]
 				) {
 					promises.push($loadUpdateChunk$(chunkId));
 					currentUpdateChunks[chunkId] = true;
