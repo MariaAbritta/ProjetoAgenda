@@ -6,36 +6,29 @@
     <div class="col-lg-2"></div>
 
     <div class="col-lg-8 my-3">
-      <h1 class="text-center">Contato</h1>
-      <p class="text-center lead">Crie ou edite seu contato abaixo.</p>
+      <h1 class="text-center">Agenda</h1>
+      <p class="text-center lead">Seus contatos estão abaixo</p>
 
       <%- include('includes/messages') %>
 
-      <% if(contato._id) { %>
-      <form action="/contato/edit/<%= contato._id %>" method="POST">
+      <% if(contatos.length > 0) { %>
+      <div class="responsive-table">
+        <table class="table my-3">
+          <% contatos.forEach(contato => { %>
+          <tr>
+            <td><%= contato.nome %></td>
+            <td><%= contato.sobrenome %></td>
+            <td><%= contato.telefone %></td>
+            <td><%= contato.email %></td>
+            <td><a href="/contato/index/<%= contato._id %>">Editar</a></td>
+            <td><a class="text-danger" href="/contato/delete/<%= contato._id %>">Excluir</a></td>
+          </tr>
+          <% }); %>
+        </table>
+      </div>
       <% } else { %>
-      <form action="/contato/register" method="POST">
+        <p class="text-center lead">Não existem contatos na sua agenda.</p>
       <% } %>
-        <input type="hidden" name="_csrf" value=<%= csrfToken %>>
-        <div class="form-group">
-          <label>Nome</label>
-          <input value="<%= contato.nome %>" type="text" class="form-control" name="nome">
-        </div>
-        <div class="form-group">
-          <label>Sobrenome</label>
-          <input value="<%= contato.sobrenome %>" type="text" class="form-control" name="sobrenome">
-        </div>
-        <div class="form-group">
-          <label>Email</label>
-          <input value="<%= contato.email %>" type="email" class="form-control" name="email">
-        </div>
-        <div class="form-group">
-          <label>Telefone</label>
-          <input value="<%= contato.telefone %>" type="tel" class="form-control" name="telefone">
-        </div>
-        <button type="submit" class="btn btn-primary">Salvar</button>
-      </form>
-
 
     </div>
     
