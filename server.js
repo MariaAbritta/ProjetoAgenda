@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const app = express();
 const mongoose = require('mongoose');
+
 mongoose.connect(process.env.CONNECTIONSTRING,
   {
     useNewUrlParser: true,
@@ -12,16 +13,16 @@ mongoose.connect(process.env.CONNECTIONSTRING,
     app.emit('pronto');
   })
   .catch(e => console.log(e));
+
 const session = require('express-session');
 const MongoStore = require('connect-mongo');
 const flash = require('connect-flash');
 const routes = require('./routes');
 const path = require('path');
-// const helmet = require('helmet'); // helmet começou a causar problemas no localhost por conta da falta de SSL
 const csrf = require('csurf');
+const port = process.env.PORT;
 const { middlewareGlobal, checkCsrfError, csrfMiddleware } = require('./src/middlewares/middleware');
 
-// app.use(helmet()); // helmet começou a causar problemas no localhost por conta da falta de SSL
 
 app.use(express.urlencoded({ extended: true }));
 app.use(express.json());
@@ -37,22 +38,22 @@ const sessionOptions = session({
     httpOnly: true
   }
 });
+
 app.use(sessionOptions);
 app.use(flash());
-
 app.set('views', path.resolve(__dirname, 'src', 'views'));
 app.set('view engine', 'ejs');
-
 app.use(csrf());
+
 // Nossos próprios middlewares
+app.set("view engine", "ejs");
+app.use(express.static(path.join(__dirname, "public")));
+app.use(express.urlencoded());
 app.use(middlewareGlobal);
 app.use(checkCsrfError);
 app.use(csrfMiddleware);
 app.use(routes);
 
-app.on('pronto', () => {
-  app.listen(3000, () => {
-    console.log('Acessar http://localhost:3000');
-    console.log('Servidor executando na porta 3000');
-  });
+app.listen(port, () => {
+  console.log((`Servidor rodando em http://localhost:${port}`)) 
 });
