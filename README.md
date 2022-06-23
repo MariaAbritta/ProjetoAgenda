@@ -23,8 +23,7 @@ Clone e instale:
   - Clone o repositório com o comando:
    
      ```bash
-        git clone https://github.com/MariaAbritta/ToDoList-TrilhaNode
-     ```
+        git clone https://github.com/MariaAbritta/ProjetoAgenda.git
 
   - Navegue para  do diretório criado com:
      ```bash
